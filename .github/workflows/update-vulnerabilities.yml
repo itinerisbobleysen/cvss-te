@@ -2,94 +2,71 @@ name: Update Vulnerability Info
 
 on:
   schedule:
-    - cron: '0 8,20 * * *'
+    - cron: "0 */6 * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
 
+# Reduce noisy Node deprecation logs from transitive action deps (e.g., punycode)
+env:
+  NODE_OPTIONS: --no-deprecation
+
 concurrency:
-  group: update-vulnerabilities
+  group: update-vulnerabilities-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  update-vulnerability-data:
+  update-vulnerabilities:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 120
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
+        uses: actions/checkout@v4
 
       - name: Set up Python
+        # v5 uses modern runtime and avoids legacy Node runtime warnings
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
+          cache: "pip"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r code/requirements.txt
-
-      - name: Set up Git configuration
-        run: |
-          git config --global user.name 'GitHub Actions Bot'
-          git config --global user.email 'actions@github.com'
-
-      - name: Run NVD Processing Script
-        env:
-          VULNCHECK_API_KEY: ${{ secrets.VULNCHECK_API_KEY }}
-        run: python code/process_nvd.py
-
-      - name: Cleanup temporary NVD files
-        run: |
-          echo "🧹 Cleaning up temporary NVD JSON files..."
-          rm -f nvdcve-2.0-*.json
-          rm -f *.json.gz
-          echo "✅ Cleanup complete"
-
-      - name: Check file sizes
-        run: |
-          echo "📊 Checking output file sizes..."
-          if [ -f cvss-te.csv ]; then
-            CSV_SIZE=$(du -h cvss-te.csv | cut -f1)
-            CSV_SIZE_MB=$(du -m cvss-te.csv | cut -f1)
-            echo "cvss-te.csv: $CSV_SIZE (${CSV_SIZE_MB}MB)"
-
-            if [ $CSV_SIZE_MB -gt 90 ]; then
-              echo "⚠️  WARNING: File is close to GitHub's 100MB limit!"
-            elif [ $CSV_SIZE_MB -gt 50 ]; then
-              echo "⚠️  File exceeds GitHub's 50MB recommendation"
-            fi
+          if [ -f code/requirements.txt ]; then
+            pip install -r code/requirements.txt
+          elif [ -f requirements.txt ]; then
+            pip install -r requirements.txt
           fi
 
-      - name: Commit and push if there are changes
+      - name: Run vulnerability updater
+        env:
+          PYTHONUNBUFFERED: "1"
         run: |
-          set -e
-          TAG="v$(date +%Y%m%d%H%M%S)"
-          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          if [ -f code/update_vulnerabilities.py ]; then
+            python code/update_vulnerabilities.py
+          elif [ -f update_vulnerabilities.py ]; then
+            python update_vulnerabilities.py
+          else
+            echo "Could not find update_vulnerabilities.py in expected locations."
+            exit 1
+          fi
 
-          git add cvss-te.csv || true
-          git add data/ || true
-          git add code/last_run.txt || true
+      - name: Commit and push changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Add common output locations (ignore missing paths)
+          git add -A code/data data code/output output . || true
+          git add code/last_run.txt last_run.txt || true
 
           if git diff --cached --quiet; then
             echo "No changes to commit"
             exit 0
           fi
 
-          git commit -m "Updated CVSS-TE data $(date +%Y-%m-%d)"
-          git push origin HEAD:main
-
-          git tag -a "$TAG" -m "Updated CVSS-TE data $(date +%Y-%m-%d)"
-          git push origin "$TAG"
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.TAG }}
-          name: Release ${{ env.TAG }}
-          draft: false
-          prerelease: false
+          git commit -m "chore: update vulnerability data [skip ci]"
+          git push
