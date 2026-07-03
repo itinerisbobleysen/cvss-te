@@ -40,9 +40,9 @@ def generate_nvd_feeds():
         'modified': 'https://nvd.nist.gov/feeds/json/cve/2.0/nvdcve-2.0-modified.json.gz',
     }
     
-    current_year = date.today().year
-    for year in range(2002, current_year + 1):
-        feeds[str(year)] = f'https://nvd.nist.gov/feeds/json/cve/2.0/nvdcve-2.0-{year}.json.gz'
+    #current_year = date.today().year
+    #for year in range(2002, current_year + 1):
+    #    feeds[str(year)] = f'https://nvd.nist.gov/feeds/json/cve/2.0/nvdcve-2.0-{year}.json.gz'
     
     return feeds
 
