@@ -1,4 +1,4 @@
-name: Update Vulnerability Data
+name: Update Vulnerability Info
 
 on:
   schedule:
