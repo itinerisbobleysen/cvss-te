@@ -29,9 +29,11 @@ EPSS_CSV = f'https://epss.cyentia.com/epss_scores-current.csv.gz'
 EPSS_BACKUP = './data/epss/epss_scores.csv'  # Backup location
 TIMESTAMP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'last_run.txt')
 
-# Set to a positive integer to split the output CSV into chunks of that many records.
-# Set to 0 or None to disable splitting.
-SPLIT_RECORDS_PER_FILE = 50000
+# GitHub rejects files larger than 100 MB.  When splitting is enabled, each
+# output file is kept below this threshold (90 MB gives a comfortable buffer).
+# The monolithic cvss-te.csv is skipped whenever the data exceeds this limit.
+# Set to 0 or None to disable splitting and always write a single file.
+MAX_SPLIT_FILE_SIZE = 90 * 1024 * 1024  # 90 MB
 
 def create_directories():
     """Create necessary directories for the script"""
@@ -449,33 +451,65 @@ def enrich_df(nvd_df):
 
     return cvss_te_df
 
-def split_csv(df, records_per_file, output_dir):
+def split_csv(df, max_file_size, output_dir):
     """
-    Split a DataFrame into multiple CSV files, each containing at most
-    *records_per_file* rows.  Files are named cvss-te-01.csv, cvss-te-02.csv, …
+    Split a DataFrame into multiple CSV files where each file stays below
+    *max_file_size* bytes.  Records are never split across files.
+    Files are named cvss-te-01.csv, cvss-te-02.csv, …
+
+    The header row is written to every file so each one is self-contained.
 
     Args:
         df (pandas.DataFrame): The data to split.
-        records_per_file (int): Maximum number of rows per output file.
+        max_file_size (int): Maximum file size in bytes.
         output_dir (str): Directory where the split files are written.
     """
-    if records_per_file <= 0:
-        logger.warning("split_csv called with records_per_file <= 0; skipping split")
-        return
+    import io
 
+    header = df.columns.tolist()
+
+    # Estimate the header size once
+    header_buf = io.StringIO()
+    df.iloc[:0].to_csv(header_buf, index=False)
+    header_bytes = len(header_buf.getvalue().encode('utf-8'))
+
+    file_index = 1
+    chunk_start = 0
     total_rows = len(df)
-    num_files = (total_rows + records_per_file - 1) // records_per_file
+
     logger.info(
-        f"Splitting {total_rows} records into {num_files} file(s) "
-        f"({records_per_file} records per file)"
+        f"Splitting {total_rows} records into files no larger than "
+        f"{max_file_size / (1024 * 1024):.0f} MB"
     )
 
-    for i in range(num_files):
-        chunk = df.iloc[i * records_per_file : (i + 1) * records_per_file]
-        filename = f"cvss-te-{i + 1:02d}.csv"
+    while chunk_start < total_rows:
+        current_size = header_bytes
+        chunk_end = chunk_start
+
+        while chunk_end < total_rows:
+            row_buf = io.StringIO()
+            df.iloc[chunk_end:chunk_end + 1].to_csv(row_buf, index=False, header=False)
+            row_bytes = len(row_buf.getvalue().encode('utf-8'))
+
+            if chunk_end > chunk_start and current_size + row_bytes > max_file_size:
+                # This row would exceed the limit — close the current chunk
+                break
+
+            current_size += row_bytes
+            chunk_end += 1
+
+        chunk = df.iloc[chunk_start:chunk_end]
+        filename = f"cvss-te-{file_index:02d}.csv"
         filepath = os.path.join(output_dir, filename)
         chunk.to_csv(filepath, index=False)
-        logger.info(f"Wrote {len(chunk)} records to {filepath}")
+        actual_size = os.path.getsize(filepath)
+        logger.info(
+            f"Wrote {len(chunk)} records to {filepath} "
+            f"({actual_size / (1024 * 1024):.2f} MB)"
+        )
+
+        chunk_start = chunk_end
+        file_index += 1
 
 
 def save_last_run_timestamp(filename=TIMESTAMP_FILE):
@@ -519,16 +553,33 @@ def main():
         
         # Fix any problematic CVEs with unknown scores
         fixed_df = enrich_nvd.recalculate_problem_cves(enriched_df)
-        
-        # Save final output
+
         output_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cvss-te.csv')
-        logger.info(f'Saving final data to {output_file}')
-        fixed_df.to_csv(output_file, index=False, mode='w')
-        
-        # Optionally split the output CSV into smaller files
-        if SPLIT_RECORDS_PER_FILE and SPLIT_RECORDS_PER_FILE > 0:
-            output_dir = os.path.dirname(output_file)
-            split_csv(fixed_df, SPLIT_RECORDS_PER_FILE, output_dir)
+        output_dir = os.path.dirname(output_file)
+
+        if MAX_SPLIT_FILE_SIZE and MAX_SPLIT_FILE_SIZE > 0:
+            # Estimate full-file size before writing to avoid committing a file
+            # that exceeds GitHub's 100 MB limit.
+            import io
+            size_buf = io.StringIO()
+            fixed_df.to_csv(size_buf, index=False)
+            estimated_size = len(size_buf.getvalue().encode('utf-8'))
+
+            if estimated_size > MAX_SPLIT_FILE_SIZE:
+                logger.info(
+                    f"Estimated output size {estimated_size / (1024 * 1024):.1f} MB exceeds "
+                    f"{MAX_SPLIT_FILE_SIZE / (1024 * 1024):.0f} MB limit — "
+                    f"skipping monolithic cvss-te.csv, writing split files only"
+                )
+                split_csv(fixed_df, MAX_SPLIT_FILE_SIZE, output_dir)
+            else:
+                logger.info(f'Saving final data to {output_file}')
+                fixed_df.to_csv(output_file, index=False, mode='w')
+                split_csv(fixed_df, MAX_SPLIT_FILE_SIZE, output_dir)
+        else:
+            # Splitting disabled — write the single file unconditionally.
+            logger.info(f'Saving final data to {output_file}')
+            fixed_df.to_csv(output_file, index=False, mode='w')
 
         save_last_run_timestamp(TIMESTAMP_FILE)
         logger.info("NVD processing and enrichment pipeline completed successfully")
