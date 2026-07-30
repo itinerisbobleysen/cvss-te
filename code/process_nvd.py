@@ -29,10 +29,9 @@ EPSS_CSV = f'https://epss.cyentia.com/epss_scores-current.csv.gz'
 EPSS_BACKUP = './data/epss/epss_scores.csv'  # Backup location
 TIMESTAMP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'last_run.txt')
 
-# GitHub rejects files larger than 100 MB.  When splitting is enabled, each
-# output file is kept below this threshold (90 MB gives a comfortable buffer).
-# The monolithic cvss-te.csv is skipped whenever the data exceeds this limit.
-# Set to 0 or None to disable splitting and always write a single file.
+# GitHub rejects files larger than 100 MB.  Output is always written as split
+# files (cvss-te-01.csv, cvss-te-02.csv, …), each kept below this threshold.
+# 90 MB gives a comfortable buffer below GitHub's 100 MB hard limit.
 MAX_SPLIT_FILE_SIZE = 90 * 1024 * 1024  # 90 MB
 
 def create_directories():
@@ -444,11 +443,6 @@ def enrich_df(nvd_df):
     # Sort by published date
     cvss_te_df = cvss_te_df.sort_values(by=['published_date']).reset_index(drop=True)
 
-    # Save the enriched data
-    output_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cvss-te.csv')
-    logger.info(f'Saving enriched data to {output_file}')
-    cvss_te_df.to_csv(output_file, index=False, mode='w')
-
     return cvss_te_df
 
 def split_csv(df, max_file_size, output_dir):
@@ -554,32 +548,8 @@ def main():
         # Fix any problematic CVEs with unknown scores
         fixed_df = enrich_nvd.recalculate_problem_cves(enriched_df)
 
-        output_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cvss-te.csv')
-        output_dir = os.path.dirname(output_file)
-
-        if MAX_SPLIT_FILE_SIZE and MAX_SPLIT_FILE_SIZE > 0:
-            # Estimate full-file size before writing to avoid committing a file
-            # that exceeds GitHub's 100 MB limit.
-            import io
-            size_buf = io.StringIO()
-            fixed_df.to_csv(size_buf, index=False)
-            estimated_size = len(size_buf.getvalue().encode('utf-8'))
-
-            if estimated_size > MAX_SPLIT_FILE_SIZE:
-                logger.info(
-                    f"Estimated output size {estimated_size / (1024 * 1024):.1f} MB exceeds "
-                    f"{MAX_SPLIT_FILE_SIZE / (1024 * 1024):.0f} MB limit — "
-                    f"skipping monolithic cvss-te.csv, writing split files only"
-                )
-                split_csv(fixed_df, MAX_SPLIT_FILE_SIZE, output_dir)
-            else:
-                logger.info(f'Saving final data to {output_file}')
-                fixed_df.to_csv(output_file, index=False, mode='w')
-                split_csv(fixed_df, MAX_SPLIT_FILE_SIZE, output_dir)
-        else:
-            # Splitting disabled — write the single file unconditionally.
-            logger.info(f'Saving final data to {output_file}')
-            fixed_df.to_csv(output_file, index=False, mode='w')
+        output_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        split_csv(fixed_df, MAX_SPLIT_FILE_SIZE, output_dir)
 
         save_last_run_timestamp(TIMESTAMP_FILE)
         logger.info("NVD processing and enrichment pipeline completed successfully")
