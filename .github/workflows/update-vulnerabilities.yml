@@ -53,17 +53,15 @@ jobs:
       - name: Check file sizes
         run: |
           echo "📊 Checking output file sizes..."
-          if [ -f cvss-te.csv ]; then
-            CSV_SIZE=$(du -h cvss-te.csv | cut -f1)
-            CSV_SIZE_MB=$(du -m cvss-te.csv | cut -f1)
-            echo "cvss-te.csv: $CSV_SIZE (${CSV_SIZE_MB}MB)"
-
-            if [ $CSV_SIZE_MB -gt 90 ]; then
-              echo "⚠️  WARNING: File is close to GitHub's 100MB limit!"
-            elif [ $CSV_SIZE_MB -gt 50 ]; then
-              echo "⚠️  File exceeds GitHub's 50MB recommendation"
+          for f in cvss-te-*.csv; do
+            [ -f "$f" ] || continue
+            SIZE=$(du -h "$f" | cut -f1)
+            SIZE_MB=$(du -m "$f" | cut -f1)
+            echo "$f: $SIZE (${SIZE_MB}MB)"
+            if [ "$SIZE_MB" -gt 90 ]; then
+              echo "⚠️  WARNING: $f exceeds 90MB — may be rejected by GitHub!"
             fi
-          fi
+          done
 
       - name: Commit and push if there are changes
         run: |
@@ -71,7 +69,7 @@ jobs:
           TAG="v$(date +%Y%m%d%H%M%S)"
           echo "TAG=$TAG" >> "$GITHUB_ENV"
 
-          git add cvss-te.csv || true
+          git add cvss-te-*.csv || true
           git add data/ || true
           git add code/last_run.txt || true
 
