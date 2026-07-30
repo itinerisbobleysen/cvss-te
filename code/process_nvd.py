@@ -31,7 +31,7 @@ TIMESTAMP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'last_
 
 # Set to a positive integer to split the output CSV into chunks of that many records.
 # Set to 0 or None to disable splitting.
-SPLIT_RECORDS_PER_FILE = 75000
+SPLIT_RECORDS_PER_FILE = 50000
 
 def create_directories():
     """Create necessary directories for the script"""
