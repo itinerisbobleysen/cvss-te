@@ -289,6 +289,27 @@ def process_nvd_files():
                             'N/A'
                         )
 
+                        # JSON 2.0: affected software - vendor, product, and version
+                        affected = entry.get('affected', [])
+                        vendors = []
+                        products = []
+                        versions = []
+                        for affected_item in affected:
+                            vendor = affected_item.get('vendor', '')
+                            if vendor:
+                                vendors.append(vendor)
+                            product = affected_item.get('product', '')
+                            if product:
+                                products.append(product)
+                            for ver_item in affected_item.get('versions', []):
+                                ver = ver_item.get('lessThanOrEqual') or ver_item.get('version', '')
+                                if ver:
+                                    versions.append(ver)
+
+                        affected_vendor = '; '.join(dict.fromkeys(vendors)) if vendors else 'N/A'
+                        affected_product = '; '.join(dict.fromkeys(products)) if products else 'N/A'
+                        affected_version = '; '.join(dict.fromkeys(versions)) if versions else 'N/A'
+
                         # Create dictionary entry for this CVE
                         dict_entry = {
                             'cve': cve,
@@ -299,7 +320,10 @@ def process_nvd_files():
                             'assigner': assigner,
                             'published_date': published_date,
                             'last_modified_date': last_modified_date,
-                            'description': description
+                            'description': description,
+                            'affected_vendor': affected_vendor,
+                            'affected_product': affected_product,
+                            'affected_version': affected_version
                         }
                         nvd_dict.append(dict_entry)
                     except Exception as e:
