@@ -412,7 +412,11 @@ def enrich_df(nvd_df):
         'cvss-bt_vector',
         # TE score (enhanced)
         'cvss-te_score',
-        'cvss-te_severity'
+        'cvss-te_severity',
+        'description',
+        'affected_vendor',
+        'affected_product',
+        'affected_version'
     ]
 
     available_columns = [col for col in essential_columns if col in cvss_te_df.columns]
