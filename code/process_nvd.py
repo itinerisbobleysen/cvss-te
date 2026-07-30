@@ -29,6 +29,10 @@ EPSS_CSV = f'https://epss.cyentia.com/epss_scores-current.csv.gz'
 EPSS_BACKUP = './data/epss/epss_scores.csv'  # Backup location
 TIMESTAMP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'last_run.txt')
 
+# Set to a positive integer to split the output CSV into chunks of that many records.
+# Set to 0 or None to disable splitting.
+SPLIT_RECORDS_PER_FILE = 75000
+
 def create_directories():
     """Create necessary directories for the script"""
     os.makedirs('./data/epss', exist_ok=True)
@@ -445,6 +449,35 @@ def enrich_df(nvd_df):
 
     return cvss_te_df
 
+def split_csv(df, records_per_file, output_dir):
+    """
+    Split a DataFrame into multiple CSV files, each containing at most
+    *records_per_file* rows.  Files are named cvss-te-01.csv, cvss-te-02.csv, …
+
+    Args:
+        df (pandas.DataFrame): The data to split.
+        records_per_file (int): Maximum number of rows per output file.
+        output_dir (str): Directory where the split files are written.
+    """
+    if records_per_file <= 0:
+        logger.warning("split_csv called with records_per_file <= 0; skipping split")
+        return
+
+    total_rows = len(df)
+    num_files = (total_rows + records_per_file - 1) // records_per_file
+    logger.info(
+        f"Splitting {total_rows} records into {num_files} file(s) "
+        f"({records_per_file} records per file)"
+    )
+
+    for i in range(num_files):
+        chunk = df.iloc[i * records_per_file : (i + 1) * records_per_file]
+        filename = f"cvss-te-{i + 1:02d}.csv"
+        filepath = os.path.join(output_dir, filename)
+        chunk.to_csv(filepath, index=False)
+        logger.info(f"Wrote {len(chunk)} records to {filepath}")
+
+
 def save_last_run_timestamp(filename=TIMESTAMP_FILE):
     """
     Save the current timestamp as the last run timestamp in a file.
@@ -492,6 +525,11 @@ def main():
         logger.info(f'Saving final data to {output_file}')
         fixed_df.to_csv(output_file, index=False, mode='w')
         
+        # Optionally split the output CSV into smaller files
+        if SPLIT_RECORDS_PER_FILE and SPLIT_RECORDS_PER_FILE > 0:
+            output_dir = os.path.dirname(output_file)
+            split_csv(fixed_df, SPLIT_RECORDS_PER_FILE, output_dir)
+
         save_last_run_timestamp(TIMESTAMP_FILE)
         logger.info("NVD processing and enrichment pipeline completed successfully")
     except Exception as e:
