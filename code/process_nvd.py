@@ -241,6 +241,76 @@ def extract_cvss_metrics(entry):
     return ('N/A', 'N/A', 'N/A', 'N/A')
 
 
+def extract_affected_software(entry):
+    """
+    Extract affected vendor/product/version values from NVD 2.0 CVE entries.
+
+    Preferred path in the current NVD 2.0 feed:
+      cve.affected[].affectedData[]
+
+    Some records may still include a flatter legacy shape; keep a fallback so
+    we don't regress when feed content varies.
+
+    Args:
+        entry (dict): The 'cve' object from a vulnerability item.
+
+    Returns:
+        tuple: (affected_vendor, affected_product, affected_version)
+    """
+    vendors = []
+    products = []
+    versions = []
+
+    affected = entry.get('affected', [])
+    for affected_item in affected:
+        # NVD 2.0 current shape: affected -> affectedData[]
+        affected_data = affected_item.get('affectedData', [])
+
+        if affected_data:
+            for data_item in affected_data:
+                vendor = data_item.get('vendor', '')
+                product = data_item.get('product', '')
+                if vendor:
+                    vendors.append(vendor)
+                if product:
+                    products.append(product)
+
+                for ver_item in data_item.get('versions', []):
+                    # Prefer bounded versions if available, then exact version.
+                    ver = (
+                        ver_item.get('lessThanOrEqual')
+                        or ver_item.get('lessThan')
+                        or ver_item.get('version', '')
+                    )
+                    if ver:
+                        versions.append(ver)
+            continue
+
+        # Fallback: flatter/legacy shape where vendor/product/versions are
+        # directly in each affected item.
+        vendor = affected_item.get('vendor', '')
+        product = affected_item.get('product', '')
+        if vendor:
+            vendors.append(vendor)
+        if product:
+            products.append(product)
+
+        for ver_item in affected_item.get('versions', []):
+            ver = (
+                ver_item.get('lessThanOrEqual')
+                or ver_item.get('lessThan')
+                or ver_item.get('version', '')
+            )
+            if ver:
+                versions.append(ver)
+
+    affected_vendor = '; '.join(dict.fromkeys(vendors)) if vendors else 'N/A'
+    affected_product = '; '.join(dict.fromkeys(products)) if products else 'N/A'
+    affected_version = '; '.join(dict.fromkeys(versions)) if versions else 'N/A'
+
+    return affected_vendor, affected_product, affected_version
+
+
 def process_nvd_files():
     """
     Processes the NVD JSON files and returns a DataFrame containing the data.
@@ -294,26 +364,8 @@ def process_nvd_files():
                             'N/A'
                         )
 
-                        # JSON 2.0: affected software - vendor, product, and version
-                        affected = entry.get('affected', [])
-                        vendors = []
-                        products = []
-                        versions = []
-                        for affected_item in affected:
-                            vendor = affected_item.get('vendor', '')
-                            if vendor:
-                                vendors.append(vendor)
-                            product = affected_item.get('product', '')
-                            if product:
-                                products.append(product)
-                            for ver_item in affected_item.get('versions', []):
-                                ver = ver_item.get('lessThanOrEqual') or ver_item.get('version', '')
-                                if ver:
-                                    versions.append(ver)
-
-                        affected_vendor = '; '.join(dict.fromkeys(vendors)) if vendors else 'N/A'
-                        affected_product = '; '.join(dict.fromkeys(products)) if products else 'N/A'
-                        affected_version = '; '.join(dict.fromkeys(versions)) if versions else 'N/A'
+                        # JSON 2.0: affected software is in cve.affected[].affectedData[]
+                        affected_vendor, affected_product, affected_version = extract_affected_software(entry)
 
                         # Create dictionary entry for this CVE
                         dict_entry = {
